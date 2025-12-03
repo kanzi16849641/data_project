@@ -4,6 +4,7 @@ import numpy as np
 import plotly.express as px
 import seaborn as sns
 import matplotlib.pyplot as plt
+import io # 파일 처리 라이브러리 추가
 
 # 폰트 설정을 위한 Matplotlib 설정 (한글 깨짐 방지 - Streamlit 환경에 따라 필요 없을 수 있음)
 # plt.rcParams['font.family'] = 'Malgun Gothic' # Windows 사용자
@@ -92,15 +93,29 @@ def main():
 
     # 파일 업로드 섹션
     st.sidebar.header("📂 파일 업로드")
+    
+    # CSV와 XLSX 모두 허용
     uploaded_file = st.sidebar.file_uploader(
-        "운동 데이터를 담은 CSV 파일을 업로드해주세요.", 
-        type=['csv']
+        "운동 데이터를 담은 CSV 또는 XLSX 파일을 업로드해주세요.", 
+        type=['csv', 'xlsx'] 
     )
 
     if uploaded_file is not None:
         try:
-            # 파일을 데이터프레임으로 읽기
-            df = pd.read_csv(uploaded_file)
+            # 파일 확장자를 확인하여 적절한 함수로 읽기
+            file_extension = uploaded_file.name.split('.')[-1].lower()
+            
+            if file_extension == 'csv':
+                # CSV 파일
+                df = pd.read_csv(uploaded_file)
+            elif file_extension == 'xlsx':
+                # Excel 파일
+                df = pd.read_excel(uploaded_file)
+            else:
+                st.warning("지원하지 않는 파일 형식입니다. CSV 또는 XLSX 파일을 업로드해주세요.")
+                st.session_state.data = None
+                return
+
             st.session_state.data = df
             st.success("파일 업로드 및 데이터 로드 성공!")
             
@@ -110,7 +125,7 @@ def main():
             st.markdown("---")
 
         except Exception as e:
-            st.error(f"파일을 읽는 도중 오류가 발생했습니다: {e}")
+            st.error(f"파일을 읽는 도중 오류가 발생했습니다. 파일 형식 또는 내용(Sheet 이름 등)을 확인해주세요: {e}")
             st.session_state.data = None
             
     if st.session_state.data is not None:
@@ -125,7 +140,7 @@ def main():
         top_correlations, heatmap_data = analyze_fitness_data(df, target_col, top_n)
 
         if top_correlations is None:
-            st.warning(heatmap_data) # 오류 메시지 출력
+            st.warning(heatmap_data) # 오류 메시지 출력 (예: '체지방율' 컬럼이 없는 경우)
             return
             
         st.markdown(f"**'{target_col}'**과 **가장 높은 상관관계**를 보이는 **상위 {top_n}개** 속성입니다.")
@@ -152,7 +167,7 @@ def main():
             create_scatterplot(df, target_col, selected_feature)
         
     else:
-        st.info("왼쪽 사이드바에서 CSV 파일을 업로드하여 분석을 시작하세요.")
+        st.info("왼쪽 사이드바에서 CSV 또는 XLSX 파일을 업로드하여 분석을 시작하세요.")
 
 if __name__ == '__main__':
     main()
