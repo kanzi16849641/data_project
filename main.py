@@ -26,7 +26,7 @@ if uploaded_file is not None:
     else:
         st.info(f"감지된 시간대 컬럼 수: {len(time_cols)}개")
 
-        # 4. 전처리 옵션 (사이드바)
+        # 4. 전처리 / 정규화 옵션 (사이드바)
         st.sidebar.header("🧹 전처리 옵션")
 
         na_method = st.sidebar.selectbox(
@@ -39,6 +39,10 @@ if uploaded_file is not None:
             "이상치 처리 방식",
             ["처리하지 않음", "IQR 기반 클리핑"],
             index=1,
+        )
+
+        normalize_flag = st.sidebar.checkbox(
+            "시간대 값 정규화 (0~1 범위로 변환)", value=False
         )
 
         # 5. 결측치 처리
@@ -63,10 +67,22 @@ if uploaded_file is not None:
             for col in time_cols:
                 work_df[col] = work_df[col].clip(lower[col], upper[col])
 
-        st.subheader("🧾 전처리된 데이터 예시 (시간대 컬럼만)")
-        st.dataframe(work_df[time_cols].head(3).round(0))
+        # 7. 정규화 (0~1 Min-Max)
+        #   - 각 시간대 컬럼에서 최소값 → 0, 최대값 → 1
+        if normalize_flag:
+            st.sidebar.markdown("✔ Min-Max 정규화 적용됨 (0~1)")
+            min_vals = work_df[time_cols].min()
+            max_vals = work_df[time_cols].max()
+            # 0으로 나누는 것 방지용 eps
+            eps = 1e-9
+            work_df[time_cols] = (work_df[time_cols] - min_vals) / (max_vals - min_vals + eps)
+        else:
+            st.sidebar.markdown("정규화 미적용 (원래 승차 인원 기준)")
 
-        # 7. 호선 선택
+        st.subheader("🧾 전처리·정규화 후 데이터 예시 (시간대 컬럼만)")
+        st.dataframe(work_df[time_cols].head(3).round(3))
+
+        # 8. 호선 선택
         st.sidebar.header("🚇 호선 선택")
         lines = sorted(work_df[line_col].dropna().unique().tolist())
         selected_line = st.sidebar.selectbox("호선", lines)
@@ -74,7 +90,7 @@ if uploaded_file is not None:
         # 선택된 호선만 필터
         line_df = work_df[work_df[line_col] == selected_line]
 
-        # 8. 시간대별 평균 승차 계산
+        # 9. 시간대별 평균 값 계산
         avg_time_data = line_df[time_cols].mean()
 
         hourly_data = []
@@ -83,18 +99,21 @@ if uploaded_file is not None:
             hour_match = re.search(r"(\d{2})시", col)
             if hour_match:
                 hour = int(hour_match.group(1))
-                hourly_data.append({"시간": hour, "승차평균": avg_time_data[col]})
+                hourly_data.append({"시간": hour, "값": avg_time_data[col]})
 
         hourly_df = pd.DataFrame(hourly_data).sort_values("시간")
 
-        # 9. 24시간 선 그래프 (시간대 분석)
+        # y축 라벨: 정규화 여부에 따라 변경
+        y_label = "정규화된 값 (0~1)" if normalize_flag else "평균 승차인원"
+
+        # 10. 24시간 선 그래프 (시간대 분석)
         st.subheader(f"📈 {selected_line} 시간대별 이용 패턴")
 
         fig_line = px.line(
             hourly_df,
             x="시간",
-            y="승차평균",
-            title=f"{selected_line} 시간대별 평균 승차인원",
+            y="값",
+            title=f"{selected_line} 시간대별 {'정규화된' if normalize_flag else '평균'} 값",
             markers=True,
             line_shape="linear",
         )
@@ -106,7 +125,7 @@ if uploaded_file is not None:
 
         fig_line.update_layout(
             xaxis=dict(title="시간대", tickmode="linear", dtick=1),
-            yaxis=dict(title="평균 승차인원"),
+            yaxis=dict(title=y_label),
             hovermode="x unified",
             plot_bgcolor="white",
             paper_bgcolor="white",
@@ -114,7 +133,7 @@ if uploaded_file is not None:
 
         st.plotly_chart(fig_line, use_container_width=True)
 
-        # 10. 주요 시간대(야간/출퇴근) 비교
+        # 11. 주요 시간대(야간/출퇴근) 비교
         st.subheader("⏰ 주요 시간대 비교 (야간 vs 출퇴근)")
 
         night_mask = (hourly_df["시간"] >= 22) | (hourly_df["시간"] <= 6)
@@ -131,12 +150,13 @@ if uploaded_file is not None:
                 fig_night = px.bar(
                     night_data,
                     x="시간",
-                    y="승차평균",
-                    color="승차평균",
+                    y="값",
+                    color="값",
                     color_continuous_scale="Reds",
+                    labels={"값": y_label},
                 )
                 fig_night.update_layout(
-                    showlegend=False, xaxis_title="시간대", yaxis_title="평균 승차인원"
+                    showlegend=False, xaxis_title="시간대", yaxis_title=y_label
                 )
                 st.plotly_chart(fig_night, use_container_width=True)
             else:
@@ -148,32 +168,33 @@ if uploaded_file is not None:
                 fig_rush = px.bar(
                     rush_data,
                     x="시간",
-                    y="승차평균",
-                    color="승차평균",
+                    y="값",
+                    color="값",
                     color_continuous_scale="Blues",
+                    labels={"값": y_label},
                 )
                 fig_rush.update_layout(
-                    showlegend=False, xaxis_title="시간대", yaxis_title="평균 승차인원"
+                    showlegend=False, xaxis_title="시간대", yaxis_title=y_label
                 )
                 st.plotly_chart(fig_rush, use_container_width=True)
             else:
                 st.write("해당 구간 데이터 없음")
 
-        # 11. 핵심 메트릭
-        peak_row = hourly_df.loc[hourly_df["승차평균"].idxmax()]
-        night_avg = night_data["승차평균"].mean() if len(night_data) > 0 else 0
-        rush_avg = rush_data["승차평균"].mean() if len(rush_data) > 0 else 0
+        # 12. 핵심 메트릭 (정규화 여부 상관 없이 비율 개념은 유지)
+        peak_row = hourly_df.loc[hourly_df["값"].idxmax()]
+        night_avg = night_data["값"].mean() if len(night_data) > 0 else 0
+        rush_avg = rush_data["값"].mean() if len(rush_data) > 0 else 0
         night_ratio = (night_avg / rush_avg * 100) if rush_avg > 0 else 0
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("🏆 피크 시간대", f"{int(peak_row['시간'])}시", f"{peak_row['승차평균']:.0f}")
-        c2.metric("🌙 야간 평균", f"{night_avg:.0f}")
-        c3.metric("💼 출퇴근 평균", f"{rush_avg:.0f}")
+        c1.metric("🏆 피크 시간대", f"{int(peak_row['시간'])}시", f"{peak_row['값']:.3f}")
+        c2.metric("🌙 야간 평균", f"{night_avg:.3f}")
+        c3.metric("💼 출퇴근 평균", f"{rush_avg:.3f}")
         c4.metric("야간/출퇴근 비율", f"{night_ratio:.0f}%")
 
-        # 12. 상세 테이블
+        # 13. 상세 테이블
         st.subheader("📋 시간대별 상세 데이터")
-        st.dataframe(hourly_df.round(0))
+        st.dataframe(hourly_df.round(3))
 
 else:
     st.info("👆 서울시 지하철 시간대별 승차 CSV를 업로드해주세요.")
