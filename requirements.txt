@@ -5,3 +5,5 @@ matplotlib
 seaborn
 plotly-express
 openpyxl
+plotly.graph_objects
+plotly.express
