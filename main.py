@@ -1,82 +1,60 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
 st.title("🌙 서울 지하철 밤샘 분석기")
 
-# 파일 업로드
+# 파일 업로드 (버튼 없이 즉시 처리)
 uploaded_file = st.file_uploader("지하철 CSV 업로드", type="csv")
 
 if uploaded_file is not None:
+    st.success("✅ 파일 업로드 완료! 자동 분석 중...")
+    
     try:
-        # 안전하게 CSV 로드 (cp949 한글 인코딩)
+        # 데이터 로드
         df = pd.read_csv(uploaded_file, encoding='cp949', low_memory=False)
         
-        st.subheader("📊 데이터 컬럼 확인")
-        st.write("컬럼 목록:", df.columns.tolist())
+        st.subheader("📊 데이터 확인")
+        st.write("컬럼:", list(df.columns))
         st.dataframe(df.head(3))
         
-        # 서울시 지하철 표준 컬럼 자동 탐지
-        time_candidates = [col for col in df.columns if '시간' in str(col)]
-        up_candidates = [col for col in df.columns if '승차' in str(col)]
-        down_candidates = [col for col in df.columns if '하차' in str(col)]
-        line_candidates = [col for col in df.columns if '호선' in str(col)]
+        # 자동 컬럼 탐지
+        time_col = next((col for col in df.columns if '시간' in str(col)), None)
+        up_col = next((col for col in df.columns if '승차' in str(col)), None)
+        down_col = next((col for col in df.columns if '하차' in str(col)), None)
+        line_col = next((col for col in df.columns if '호선' in str(col)), None)
         
-        st.sidebar.header("🔧 분석 설정")
+        st.info(f"자동 탐지: 시간={time_col}, 승차={up_col}, 하차={down_col}")
         
-        # 안전한 컬럼 선택 (존재하는 것만)
-        if time_candidates:
-            time_col = st.sidebar.selectbox("시간대", time_candidates)
-        else:
-            time_col = None
+        if time_col and up_col:
+            # 시간대별 분석 (안전하게)
+            df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
+            df_clean = df.dropna(subset=[time_col, up_col])
             
-        if up_candidates:
-            up_col = st.sidebar.selectbox("승차인원", up_candidates)
-        else:
-            up_col = None
+            hourly = df_clean.groupby(time_col)[up_col].agg(['mean', 'sum']).reset_index()
+            hourly.columns = ['시간대', '승차평균', '승차합계']
             
-        if line_candidates:
-            lines = df[line_candidates[0]].dropna().unique()[:10]
-            selected_line = st.sidebar.selectbox("호선", lines)
-        else:
-            selected_line = None
-        
-        # 분석 버튼
-        if st.button("🚀 밤샘 분석 시작") and time_col and up_col:
+            # 1. 라인 차트
+            st.subheader("📈 24시간 승차 패턴")
+            fig = px.line(hourly, x='시간대', y='승차평균', 
+                         title="시간대별 승차 평균", markers=True)
+            st.plotly_chart(fig, use_container_width=True)
             
-            with st.spinner("분석 중..."):
-                # 데이터 필터링 (안전하게)
-                work_df = df.copy()
-                
-                if selected_line:
-                    work_df = work_df[work_df[line_candidates[0]] == selected_line]
-                
-                # 시간대 숫자 변환 (에러 방지)
-                work_df[time_col] = pd.to_numeric(work_df[time_col], errors='coerce')
-                work_df = work_df.dropna(subset=[time_col, up_col])
-                
-                # 시간대별 평균
-                hourly = work_df.groupby(time_col)[up_col].mean().reset_index()
-                hourly.columns = ['시간대', '승차평균']
-                
-                # 시각화
-                st.subheader("📈 24시간 승차 패턴")
-                fig = px.line(hourly, x='시간대', y='승차평균', 
-                             title="시간대별 승차 트렌드", markers=True)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # 밤샘 피크 계산
-                night_data = hourly[(hourly['시간대'] >= 22) | (hourly['시간대'] <= 6)]
-                if len(night_data) > 0:
-                    peak_time = night_data.loc[night_data['승차평균'].idxmax(), '시간대']
-                    st.success(f"🌙 밤샘 피크: **{int(peak_time)}시**")
-                
-                st.dataframe(hourly.round(0))
-                
-    except Exception as e:
-        st.error(f"오류 발생: {str(e)}")
-        st.info("컬럼 이름을 다시 확인해주세요!")
-        
-else:
-    st.info("👆 지하철 CSV 파일을 업로드하고 '밤샘 분석 시작' 버튼을 클릭하세요!")
+            # 2. 밤샘 분석
+            night_hours = hourly[(hourly['시간대'] >= 22) | (hourly['시간대'] <= 6)]
+            if not night_hours.empty:
+                peak_night = night_hours.loc[night_hours['승차평균'].idxmax()]
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("🌙 밤샘 피크", f"{int(peak_night['시간대'])}시")
+                with col2:
+                    st.metric("최대 승차", f"{peak_night['승차평균']:.0f}명")
+            
+            # 3. 테이블
+            st.subheader("📋 시간대별 상세")
+            st.dataframe(hourly.round(0))
+            
+        else:
+            st.error("❌ '시간대' 또는 '승차인원수' 컬럼을 찾을 수 없음")
+            
+    except Exception
