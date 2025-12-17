@@ -1,57 +1,85 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
-from io import StringIO
+import numpy as np
 
-st.title("🌙 지구인 밤샘 레이더 - 한국 버전")
-st.markdown("**시간대별 CSV 데이터를 업로드하면 자동으로 밤샘 패턴 분석**")
+st.title("🌙 지하철 밤샘 분석기")
+st.markdown("**지하철 시간대 CSV 업로드 → 자동 밤샘 패턴 시각화**")
 
-# 1. 사용자 데이터 업로드
-uploaded_file = st.file_uploader("CSV 파일 선택 (컬럼: 시간, 택배/유동인구/전력 등)", type="csv")
+# 1. CSV 업로드
+uploaded_file = st.file_uploader("지하철 시간대 CSV 업로드 (승하차 컬럼 필요)", type="csv")
 
 if uploaded_file is not None:
-    # 데이터 로드 & 미리보기
     df = pd.read_csv(uploaded_file)
-    st.subheader("📊 업로드된 데이터 미리보기")
-    st.dataframe(df.head(10), use_container_width=True)
+    st.subheader("📊 데이터 미리보기")
+    st.dataframe(df.head())
     
-    # 2. 사이드바에서 분석 설정
+    # 2. 시간 컬럼 자동 찾기
     st.sidebar.header("🔧 분석 설정")
-    time_col = st.sidebar.selectbox("시간 컬럼", df.columns)
-    activity_cols = st.sidebar.multiselect("활동 컬럼 선택", df.columns[1:], default=df.columns[1:5])
+    time_col = st.sidebar.selectbox("시간 컬럼", df.select_dtypes(include='number').columns.tolist())
+    up_col = st.sidebar.selectbox("승차 컬럼", [col for col in df.columns if '승차' in col or 'up' in col.lower()] or df.columns.tolist())
+    down_col = st.sidebar.selectbox("하차 컬럼", [col for col in df.columns if '하차' in col or 'down' in col.lower()] or df.columns.tolist())
     
-    # 시간대별 평균 계산
-    df['hour'] = pd.to_datetime(df[time_col]).dt.hour
-    activity_means = df.groupby('hour')[activity_cols].mean()
+    # 3. 시간대별 집계 (24시간 평균)
+    df['hour'] = df[time_col] % 24  # 24시간 형식
+    hourly = df.groupby('hour')[up_col].mean().reset_index()
+    hourly.columns = ['hour', 'avg_up']
     
-    # 3. 메인 분석 결과
+    # 피크 시간 찾기
+    peak_hour = hourly.loc[hourly['avg_up'].idxmax(), 'hour']
+    peak_value = hourly['avg_up'].max()
+    
+    # === 시각화 1: 히트맵 (시간대별 승하차 강도) ===
+    st.subheader("🔥 시간대별 승하차 히트맵")
+    heatmap_data = pd.DataFrame({
+        '시간': [f"{int(h):02d}시" for h in hourly['hour']],
+        '승차': hourly['avg_up'].values,
+        '하차': df.groupby('hour')[down_col].mean().values
+    })
+    fig_heatmap = px.imshow(heatmap_data.set_index('시간').T.values,
+                           labels=dict(x="시간대", y="활동", color="승하차 인원"),
+                           x=heatmap_data['시간'], y=['승차', '하차'],
+                           color_continuous_scale="Viridis")
+    st.plotly_chart(fig_heatmap, use_container_width=True)
+    
+    # === 시각화 2: 24시간 라인차트 ===
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("📈 24시간 승차 패턴")
+        fig_line = px.line(hourly, x='hour', y='avg_up', 
+                          title="승차 트렌드", markers=True)
+        fig_line.update_xaxes(tickvals=list(range(0,24,2)), ticktext=[f"{h:02d}" for h in range(0,24,2)])
+        st.plotly_chart(fig_line, use_container_width=True)
+    
+    # === 핵심 메트릭 ===
     col1, col2, col3 = st.columns(3)
     with col1:
-        peak_hour = activity_means.mean(axis=1).idxmax()
-        st.metric("밤샘 피크", f"{peak_hour:02d}시", "📈")
+        st.metric("밤샘 피크", f"{int(peak_hour):02d}시", f"{peak_value:.0f}")
     with col2:
-        total_activity = activity_means.sum().max()
-        st.metric("최대 활동량", f"{total_activity:.0f}", "🔥")
+        night_avg = hourly[(hourly['hour'] >= 22) | (hourly['hour'] <= 6)]['avg_up'].mean()
+        st.metric("야간 평균", f"{night_avg:.0f}", "📊")
+    with col3:
+        rush_avg = hourly[(hourly['hour'] >= 7) & (hourly['hour'] <= 9)]['avg_up'].mean()
+        st.metric("출근 피크", f"{rush_avg:.0f}", f"{night_avg/rush_avg:.0%}↓")
     
-    # 레이더 차트
-    fig = go.Figure()
-    for col in activity_cols:
-        fig.add_trace(go.Scatterpolar(r=activity_means[col], 
-                                     theta=[f"{h:02d}시" for h in range(24)],
-                                     fill='toself', name=col))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, max(activity_means.max())*1.1])),
-                      showlegend=True, title="24시간 밤샘 패턴 레이더")
-    st.plotly_chart(fig, use_container_width=True)
+    # === 밤샘 인사이트 ===
+    st.subheader("💡 밤샘 분석 결과")
+    if peak_hour >= 22 or peak_hour <= 6:
+        st.success(f"✅ **{int(peak_hour):02d}시**가 가장 붐빕니다! 새벽/늦은 밤 지하철 이용자가 많아요.")
+    else:
+        st.warning(f"⚠️ 출퇴근 중심 ({int(peak_hour):02d}시 피크)")
     
-    # 4. 자동 인사이트 생성
-    st.subheader("💡 밤샘 인사이트")
-    peak_activities = activity_means.iloc[peak_hour][activity_cols].sort_values(ascending=False)
-    top_activity = peak_activities.index[0]
-    st.success(f"**{peak_hour:02d}시**에 **{top_activity}**이 가장 활발합니다!")
-    st.info(f"데이터 기반 분석: {activity_cols[0]} 상관계수 {activity_means.corr().iloc[0,1]:.2f}")
-    
-    # 상세 테이블
-    st.dataframe(activity_means.round(1))
+    st.dataframe(hourly.round(0))
     
 else:
-    st.info("👆 공공데이터포털에서 '시간대 택배', 'S-DoT 유동인구' CSV를 다운로드해 업로드하세요!")
+    st.info("""
+    **지하철 CSV 예시 형식:**
+    ```
+    시간, 승차인원, 하차인원
+    5, 1234, 567
+    6, 2345, 890
+    ...
+    ```
+    공공데이터포털에서 "지하철 시간대" 검색 → CSV 다운로드!
+    """)
