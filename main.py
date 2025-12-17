@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
+import re  # ← 이거 추가!
 
 st.title("🌙 서울 지하철 밤샘 분석기 - 호선별 히트맵")
 
@@ -18,16 +19,14 @@ if uploaded_file is not None:
         st.dataframe(df.head(2))
         
         # 호선 컬럼 찾기
-        line_col = next((col for col in df.columns if '호선' in str(col)), None)
-        if not line_col:
-            line_col = '호선명'  # 기본값
-            
+        line_col = next((col for col in df.columns if '호선' in str(col)), '호선명')
+        
         # 시간대 컬럼들 찾기 (00시-01시, 04시-05시 등)
         time_cols = [col for col in df.columns if re.search(r'\d{2}시-\d{2}시', str(col))]
-        st.info(f"발견된 시간대 컬럼: {len(time_cols)}개")
+        st.info(f"발견된 시간대: {len(time_cols)}개")
         
         if len(time_cols) > 0 and line_col in df.columns:
-            # 호선 선택 (사이드바)
+            # 호선 선택
             st.sidebar.header("🔧 호선 선택")
             lines = sorted(df[line_col].dropna().unique())[:20]
             selected_line = st.sidebar.selectbox("호선", lines)
@@ -38,16 +37,36 @@ if uploaded_file is not None:
             # 시간대별 데이터 재구성
             time_data = []
             for time_col in time_cols:
-                hour_start = int(re.search(r'(\d{2})시', time_col).group(1))
-                avg_passengers = line_df[time_col].mean()
-                time_data.append({'시간대': hour_start, '승차인원': avg_passengers})
+                hour_match = re.search(r'(\d{2})시-\d{2}시', time_col)
+                if hour_match:
+                    hour_start = int(hour_match.group(1))
+                    avg_passengers = line_df[time_col].mean()
+                    time_data.append({'시간대': hour_start, '승차인원': avg_passengers})
             
             hourly_df = pd.DataFrame(time_data)
             
-            # === 1. 호선별 24시간 라인차트 ===
+            # === 라인차트 ===
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader(f"📈 {selected_line} 24시간 패턴")
                 fig_line = px.line(hourly_df, x='시간대', y='승차인원', 
-                                  title=f"{selected_line} 승차 트렌드", markers=True)
-                st.plotly_chart(fig_line, use
+                                  title=f"{selected_line} 승차", markers=True)
+                st.plotly_chart(fig_line, use_container_width=True)
+            
+            # === 히트맵 ===
+            with col2:
+                st.subheader("🌙 밤샘 히트맵")
+                night_df = hourly_df[(hourly_df['시간대'] >= 22) | (hourly_df['시간대'] <= 6)]
+                if len(night_df) > 0:
+                    fig_heatmap = px.imshow(
+                        night_df[['승차인원']].T.values,
+                        x=[f"{int(h):02d}시" for h in night_df['시간대']],
+                        y=['밤샘'],
+                        color_continuous_scale='RdYlBu_r',
+                        title="밤샘 시간대"
+                    )
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+            
+            # === 메트릭 ===
+            peak_night = hourly_df.loc[hourly_df['승차인원'].idxmax()]
+            col
